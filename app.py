@@ -4,7 +4,7 @@ import pandas as pd
 # --- PAGE CONFIGURATION ---
 st.set_page_config(page_title="School Survey Analyzer", layout="wide", page_icon="📊")
 
-# --- CSS STYLING (The same style you liked) ---
+# --- CSS STYLING ---
 st.markdown("""
 <style>
     .card { background: white; padding: 20px; margin-bottom: 20px; border-radius: 10px; border: 1px solid #e0e0e0; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
@@ -17,7 +17,6 @@ st.markdown("""
     .bar-school { background: #95a5a6; z-index: 1; opacity: 0.3; }
     .bar-subject { background: #2980b9; z-index: 2; }
     
-    /* Collapsible Styles */
     details { margin-bottom: 10px; border: 1px solid #eee; border-radius: 5px; padding: 5px; }
     summary { cursor: pointer; color: #555; font-weight: 600; padding: 5px; outline: none; }
     summary:hover { color: #2980b9; background: #f9f9f9; }
@@ -34,7 +33,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- CATEGORY DEFINITIONS ---
+# --- CONFIGURATION ---
 CATEGORIES = {
     "1. Climate & Mindset": ["1 ", "13 ", "14 "],
     "2. Pedagogy & Challenge": ["4 ", "5 ", "8 ", "9 "],
@@ -43,14 +42,12 @@ CATEGORIES = {
 }
 
 # --- HELPER FUNCTIONS ---
-
 @st.cache_data
 def load_data(file):
     try:
         df = pd.read_csv(file, encoding='ISO-8859-1')
+        # Clean column names immediately
         df.columns = df.columns.str.strip()
-        subj_col = 'Which subject are you answering these questions about today?'
-        df[subj_col] = df[subj_col].astype(str).str.strip()
         return df
     except Exception as e:
         st.error(f"Error reading file: {e}")
@@ -70,72 +67,73 @@ def calc_pos_rate(series):
     return (pos_count / len(valid)) * 100
 
 # --- MAIN APP ---
-
 st.title("🏫 School Survey Analyzer")
-st.write("Upload your CSV file to generate interactive reports.")
+st.write("Upload your **Form Responses** CSV file (not the percentages file).")
 
-# 1. FILE UPLOAD
 uploaded_file = st.sidebar.file_uploader("Upload Survey Data (CSV)", type="csv")
 
 if uploaded_file is not None:
     df = load_data(uploaded_file)
     
     if df is not None:
-        # Preprocessing
-        subj_col = 'Which subject are you answering these questions about today?'
-        df['Stage'] = df['Which Year Group are you in?'].apply(map_stage)
+        # --- ROBUST COLUMN CHECK ---
+        # We verify these columns exist before proceeding
+        expected_cols = {
+            'Year Group': 'Which Year Group are you in?',
+            'Subject': 'Which subject are you answering these questions about today?'
+        }
+        
+        missing = [col for col in expected_cols.values() if col not in df.columns]
+        
+        if missing:
+            st.error("❌ **Incorrect File Format**")
+            st.warning(f"Could not find the following columns: {missing}")
+            st.info("💡 **Tip:** Ensure you uploaded the raw student responses file, NOT the summary percentages file.")
+            st.stop() # Stop execution here so it doesn't crash
+            
+        # Clean the subject column data
+        df[expected_cols['Subject']] = df[expected_cols['Subject']].astype(str).str.strip()
+        
+        # Create 'Stage' column safely
+        df['Stage'] = df[expected_cols['Year Group']].apply(map_stage)
         
         # Get Lists for Dropdowns
-        all_subjects = sorted(df[subj_col].unique())
+        all_subjects = sorted(df[expected_cols['Subject']].unique())
         all_stages = ['All Years', 'S1 & S2', 'S3', 'Senior Phase']
 
-        # --- SIDEBAR CONTROLS ---
+        # --- SIDEBAR ---
         st.sidebar.header("⚙️ Configuration")
-        
-        # Select Subject
         target_subject = st.sidebar.selectbox("Select Subject to Analyze", all_subjects)
-        
-        # Select Year Group
         target_stage = st.sidebar.selectbox("Select Year Group", all_stages)
-        
-        # Comparison Mode
         compare_mode = st.sidebar.radio("Compare Against:", ["Whole School Average", "Faculty Average"])
         
         faculty_subjects = []
         if compare_mode == "Faculty Average":
-            faculty_subjects = st.sidebar.multiselect(
-                "Select Subjects in Faculty", 
-                all_subjects, 
-                default=[target_subject]
-            )
+            faculty_subjects = st.sidebar.multiselect("Select Subjects in Faculty", all_subjects, default=[target_subject])
             if not faculty_subjects:
-                st.sidebar.warning("Please select at least one subject for the Faculty.")
+                st.sidebar.warning("Please select at least one subject.")
 
-        # --- DATA FILTERING ---
-        
-        # 1. Filter by Stage (for both Subject and Benchmark)
+        # --- FILTERING ---
         if target_stage != "All Years":
             df_stage = df[df['Stage'] == target_stage]
         else:
-            df_stage = df # Use full dataset
+            df_stage = df
 
         if df_stage.empty:
             st.warning(f"No data found for {target_stage}.")
             st.stop()
 
-        # 2. Define the Benchmark Data
+        # Define Benchmark
         if compare_mode == "Whole School Average":
-            benchmark_df = df_stage # Benchmark is everyone
+            benchmark_df = df_stage
             bench_name = "Whole School"
         else:
-            # Benchmark is only the selected faculty subjects
-            if not faculty_subjects:
-                st.stop()
-            benchmark_df = df_stage[df_stage[subj_col].isin(faculty_subjects)]
+            if not faculty_subjects: st.stop()
+            benchmark_df = df_stage[df_stage[expected_cols['Subject']].isin(faculty_subjects)]
             bench_name = "Faculty Average"
 
-        # 3. Define the Target Subject Data
-        subject_df = df_stage[df_stage[subj_col] == target_subject]
+        # Define Target Subject
+        subject_df = df_stage[df_stage[expected_cols['Subject']] == target_subject]
 
         if subject_df.empty:
             st.error(f"No responses found for **{target_subject}** in **{target_stage}**.")
@@ -146,33 +144,25 @@ if uploaded_file is not None:
         col1.metric("Target Subject", target_subject)
         col2.metric("Year Group", target_stage)
         col3.metric("Responses", len(subject_df))
-
         st.markdown(f"**Comparing against:** {bench_name} ({len(benchmark_df)} responses)")
         st.markdown("---")
 
-        # --- GENERATE REPORT CARDS ---
-        
-        # Map Columns
+        # --- GENERATE CARDS ---
         col_map = {}
         for cat, prefixes in CATEGORIES.items():
             col_map[cat] = [col for col in df.columns if any(col.startswith(p) for p in prefixes)]
 
-        # Generate HTML for each Category
         html_output = ""
-        
         for cat, questions in col_map.items():
-            # Calculate Category Averages
-            # Note: We flatten all question answers into one big series for the category average
+            if not questions: continue
+            
+            # Big Bar Maths
             subj_vals = subject_df[questions].values.flatten()
             bench_vals = benchmark_df[questions].values.flatten()
-            
-            # Convert back to Series to use our calc function
             s_score = calc_pos_rate(pd.Series(subj_vals))
             b_score = calc_pos_rate(pd.Series(bench_vals))
-            
             diff = s_score - b_score
             
-            # Colors & Badges
             color = "#2980b9" # Blue
             diff_html = ""
             if diff > 5:
@@ -182,31 +172,23 @@ if uploaded_file is not None:
                 color = "#c0392b" # Red
                 diff_html = f"<span class='diff-badge diff-red'>{int(diff)}%</span>"
 
-            # Start Card
             html_output += f"""
             <div class="card">
                 <h3>{cat}</h3>
-                
                 <div class="bar-container">
-                    <div class="label">
-                        <span>Category Score {diff_html}</span>
-                        <span>{int(s_score)}%</span>
-                    </div>
+                    <div class="label"><span>Category Score {diff_html}</span><span>{int(s_score)}%</span></div>
                     <div class="track">
                         <div class="bar bar-school" style="width: {b_score}%"></div>
                         <div class="bar bar-subject" style="width: {s_score}%; background: {color};"></div>
                     </div>
                 </div>
-                
-                <details>
-                    <summary>▼ Breakdown by Question</summary>
+                <details><summary>▼ Breakdown by Question</summary>
             """
             
-            # Loop individual questions
             for q in questions:
                 q_s_score = calc_pos_rate(subject_df[q])
                 q_b_score = calc_pos_rate(benchmark_df[q])
-                q_text = q.strip('"') # Clean quotes
+                q_text = q.strip('"') 
                 
                 html_output += f"""
                 <div class="q-container">
@@ -218,13 +200,10 @@ if uploaded_file is not None:
                     <div class="q-stats">You: {int(q_s_score)}% | {bench_name}: {int(q_b_score)}%</div>
                 </div>
                 """
-            
             html_output += "</details></div>"
 
-        # Render the HTML
         st.markdown(html_output, unsafe_allow_html=True)
         
-        # Legend
         st.info("""
         **Legend:**
         🟦 **Blue:** Broadly in line (+/- 5%) | 
@@ -233,4 +212,4 @@ if uploaded_file is not None:
         """)
 
 else:
-    st.info("Please upload a CSV file to begin.")
+    st.info("Please upload your **Form Responses CSV** to begin.")
