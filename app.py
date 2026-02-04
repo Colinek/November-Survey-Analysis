@@ -116,4 +116,141 @@ if uploaded_file:
         def get_stage(y):
             y = str(y).upper()
             if 'S1' in y or 'S2' in y: return 'S1 & S2'
-            if 'S3'
+            if 'S3' in y: return 'S3'
+            return 'Senior Phase' if any(s in y for s in ['S4','S5','S6']) else 'Other'
+        
+        df['Stage'] = df['Mapped_Year'].apply(get_stage)
+        df['Faculty'] = df['Mapped_Subj'].apply(assign_faculty)
+
+        # --- 2. FACULTY SELECTOR ---
+        st.sidebar.divider()
+        st.sidebar.header("1. Select Group")
+        
+        fac_list = sorted([f for f in df['Faculty'].unique() if f != "Other"])
+        if "Other" in df['Faculty'].unique(): fac_list.append("Other")
+        
+        # Store selection in session state to handle resets
+        if 'selected_faculty' not in st.session_state: st.session_state.selected_faculty = fac_list[0]
+        
+        sel_fac = st.sidebar.selectbox("Choose Faculty", fac_list, key='fac_select')
+        
+        # Get subjects in this faculty
+        fac_subjects = sorted(df[df['Faculty'] == sel_fac]['Mapped_Subj'].unique())
+        
+        # --- 3. SUBJECT FILTER (With Reset) ---
+        st.sidebar.header("2. Analysis Focus")
+        
+        # Reset Button Logic
+        if st.sidebar.button("🔄 Reset to Whole Faculty"):
+            st.session_state[f"subj_{sel_fac}"] = fac_subjects
+            
+        sel_subjects = st.sidebar.multiselect(
+            "Select Subjects:", 
+            fac_subjects, 
+            default=fac_subjects,
+            key=f"subj_{sel_fac}" # Unique key per faculty preserves state
+        )
+        
+        if not sel_subjects:
+            st.warning("Please select at least one subject.")
+            st.stop()
+            
+        # --- 4. BENCHMARK & FILTERS ---
+        sel_stage = st.sidebar.selectbox("3. Year Group Filter", ['All Years', 'S1 & S2', 'S3', 'Senior Phase'])
+        
+        st.sidebar.header("4. Benchmark")
+        bench_opts = ["Whole School Average", "Faculty Average", "Department Average"]
+        sel_bench = st.sidebar.selectbox("Compare Against:", bench_opts)
+
+        # --- DATA PROCESSING ---
+        # 1. Active Data (Stage Filter)
+        active_df = df if sel_stage == 'All Years' else df[df['Stage'] == sel_stage]
+        
+        # 2. Target Data (User Selection)
+        target_df = active_df[active_df['Mapped_Subj'].isin(sel_subjects)]
+        
+        # 3. Benchmark Data
+        if sel_bench == "Whole School Average":
+            bench_df = active_df # Everyone in that stage
+            bench_label = "Whole School"
+        elif sel_bench == "Faculty Average":
+            # Everyone in the Faculty (regardless of user subject selection)
+            bench_df = active_df[active_df['Faculty'] == sel_fac]
+            bench_label = f"{sel_fac}"
+        else: # Department Average
+            # Everyone in the SELECTED subjects (e.g. just French)
+            # Note: If looking at S3 French, this compares to S3 French (Self-comparison)
+            # Unless we want Dept Average to always be ALL YEARS? 
+            # Let's make Dept Average = The chosen subjects across ALL YEARS (if possible) 
+            # to show how this year compares to the department norm.
+            # actually, standard practice is usually comparing to the same cohort.
+            # Let's keep it simple: Department Average = The average of the selected subjects in this stage.
+            # If that's the same as target, it's 0 diff. 
+            # BETTER: Department Average usually implies "The Subject Average"
+            bench_df = df[df['Mapped_Subj'].isin(sel_subjects)] # All years for these subjects
+            bench_label = "Dept (All Years)"
+
+        if target_df.empty:
+            st.warning("No data found for this selection.")
+        else:
+            # --- DASHBOARD ---
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Target", f"{len(sel_subjects)} Subjects" if len(sel_subjects) > 1 else sel_subjects[0])
+            c2.metric("Stage", sel_stage)
+            c3.metric("Responses", len(target_df))
+            st.caption(f"Comparing against: **{bench_label}** ({len(bench_df)} responses)")
+            st.divider()
+
+            for cat, prefixes in CATEGORIES.items():
+                cat_cols = [c for c in df.columns if any(c.startswith(p) for p in prefixes)]
+                if not cat_cols: continue
+                
+                # Big Bar Maths
+                s_score = calc_pos_rate(pd.Series(target_df[cat_cols].values.flatten()))
+                b_score = calc_pos_rate(pd.Series(bench_df[cat_cols].values.flatten()))
+                diff = s_score - b_score
+                
+                color = "#2980b9"
+                badge = ""
+                if diff > 5: color, badge = "#27ae60", f"<span class='diff-badge diff-green'>+{int(diff)}%</span>"
+                elif diff < -5: color, badge = "#c0392b", f"<span class='diff-badge diff-red'>{int(diff)}%</span>"
+
+                # 1. RENDER MAIN CARD (HTML)
+                st.markdown(f"""
+                <div class="card-header">
+                    <h3>{cat} {badge}</h3>
+                    <div class="bar-container">
+                        <div class="label"><span>Category Score</span><span>{int(s_score)}%</span></div>
+                        <div class="track">
+                            <div class="bar bar-school" style="width: {b_score}%"></div>
+                            <div class="bar bar-subject" style="width: {s_score}%; background: {color};"></div>
+                        </div>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+                
+                # 2. RENDER DRILL DOWN (Native Expander)
+                # We separate this from the HTML block above to fix the rendering issue
+                with st.expander(f"▼ Breakdown by Question ({cat})"):
+                    q_html = ""
+                    for q in cat_cols:
+                        qs = calc_pos_rate(target_df[q])
+                        qb = calc_pos_rate(bench_df[q])
+                        q_text = q.strip('"')
+                        
+                        q_html += f"""
+                        <div class="q-row">
+                            <div class="q-text">{q_text}</div>
+                            <div class="q-viz">
+                                <div class="q-track">
+                                    <div class="q-bar-school" style="width:{qb}%"></div>
+                                    <div class="q-bar-subject" style="width:{qs}%"></div>
+                                </div>
+                                <div class="q-stats">You: {int(qs)}% | Bench: {int(qb)}%</div>
+                            </div>
+                        </div>
+                        """
+                    st.markdown(q_html, unsafe_allow_html=True)
+
+else:
+    st.info("Please upload your survey CSV to begin.")
