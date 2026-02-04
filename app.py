@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 
 # --- PAGE CONFIGURATION ---
-st.set_page_config(page_title="School Survey Analyzer", layout="wide", page_icon="📊")
+st.set_page_config(page_title="Faculty Analyzer", layout="wide", page_icon="🏫")
 
 # --- CSS STYLING ---
 st.markdown("""
@@ -33,7 +33,20 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- CONFIGURATION ---
+# --- CONFIGURATION: YOUR FACULTY DEFINITIONS ---
+# This maps the "Official" names you gave me.
+# The script will try to match the CSV subjects to these lists.
+FACULTY_DEFS = {
+    "English & Languages": ["English", "Media", "Gaelic", "French", "Gàidhlig", "Drama", "Literacy"],
+    "Maths": ["Maths", "Mathematics", "Applications"],
+    "Health & Wellbeing": ["PE", "Physical Education", "Sport", "Health", "Food", "Home Economics", "Cookery"],
+    "Science": ["Physics", "Biology", "Chemistry", "Science"],
+    "Music, Computing & Business": ["Business", "Admin", "IT", "Music", "Computing", "Computer"],
+    "Social Subjects": ["Classical", "Geography", "History", "Politics", "Modern Studies"],
+    "Technical": ["Woodwork", "Art", "Design", "Graphic", "Engineering", "Technical", "Textiles", "Fashion"],
+    "PSE": ["PSE", "Personal"]
+}
+
 CATEGORIES = {
     "1. Climate & Mindset": ["1 ", "13 ", "14 "],
     "2. Pedagogy & Challenge": ["4 ", "5 ", "8 ", "9 "],
@@ -45,13 +58,30 @@ CATEGORIES = {
 @st.cache_data
 def load_data(file):
     try:
-        df = pd.read_csv(file, encoding='ISO-8859-1')
-        # Clean column names immediately
+        try:
+            df = pd.read_csv(file, encoding='utf-8-sig')
+        except:
+            df = pd.read_csv(file, encoding='ISO-8859-1')
         df.columns = df.columns.str.strip()
         return df
     except Exception as e:
         st.error(f"Error reading file: {e}")
         return None
+
+def find_column(df, keywords):
+    for col in df.columns:
+        if any(k in col.lower() for k in keywords):
+            return col
+    return None
+
+def assign_faculty(subject_name):
+    """Matches a subject string to your Faculty list."""
+    s_clean = str(subject_name).lower()
+    for faculty, keywords in FACULTY_DEFS.items():
+        for k in keywords:
+            if k.lower() in s_clean:
+                return faculty
+    return "Other / Unassigned"
 
 def map_stage(year):
     y = str(year).strip().upper()
@@ -67,8 +97,8 @@ def calc_pos_rate(series):
     return (pos_count / len(valid)) * 100
 
 # --- MAIN APP ---
-st.title("🏫 School Survey Analyzer")
-st.write("Upload your **Form Responses** CSV file (not the percentages file).")
+st.title("🏫 Faculty Analyzer")
+st.write("Upload your **Form Responses** CSV file.")
 
 uploaded_file = st.sidebar.file_uploader("Upload Survey Data (CSV)", type="csv")
 
@@ -76,75 +106,111 @@ if uploaded_file is not None:
     df = load_data(uploaded_file)
     
     if df is not None:
-        # --- ROBUST COLUMN CHECK ---
-        # We verify these columns exist before proceeding
-        expected_cols = {
-            'Year Group': 'Which Year Group are you in?',
-            'Subject': 'Which subject are you answering these questions about today?'
-        }
+        # 1. Identify Columns
+        year_col = find_column(df, ['year group', 'grade', 'stage'])
+        subject_col = find_column(df, ['which subject', 'subject answering'])
         
-        missing = [col for col in expected_cols.values() if col not in df.columns]
-        
-        if missing:
-            st.error("❌ **Incorrect File Format**")
-            st.warning(f"Could not find the following columns: {missing}")
-            st.info("💡 **Tip:** Ensure you uploaded the raw student responses file, NOT the summary percentages file.")
-            st.stop() # Stop execution here so it doesn't crash
+        if not year_col or not subject_col:
+            st.error("❌ Columns Not Found. Please upload the raw responses file.")
+            st.stop()
             
-        # Clean the subject column data
-        df[expected_cols['Subject']] = df[expected_cols['Subject']].astype(str).str.strip()
+        df.rename(columns={year_col: 'Year Group', subject_col: 'Subject'}, inplace=True)
+        df['Subject'] = df['Subject'].astype(str).str.strip()
+        df['Stage'] = df['Year Group'].apply(map_stage)
         
-        # Create 'Stage' column safely
-        df['Stage'] = df[expected_cols['Year Group']].apply(map_stage)
+        # 2. Assign Faculties
+        df['Faculty'] = df['Subject'].apply(assign_faculty)
+
+        # --- SIDEBAR CONFIG ---
+        st.sidebar.header("1. Select Group")
         
-        # Get Lists for Dropdowns
-        all_subjects = sorted(df[expected_cols['Subject']].unique())
+        # A. Select Faculty
+        all_faculties = sorted([f for f in df['Faculty'].unique() if f != "Other / Unassigned"])
+        # Add 'Other' to the end if it exists
+        if "Other / Unassigned" in df['Faculty'].unique():
+            all_faculties.append("Other / Unassigned")
+            
+        selected_faculty = st.sidebar.selectbox("Choose Faculty", all_faculties)
+        
+        # Filter to just this faculty for the next steps
+        faculty_df = df[df['Faculty'] == selected_faculty]
+        available_subjects = sorted(faculty_df['Subject'].unique())
+        
+        # B. Select Target (The "Checkboxes" request)
+        st.sidebar.header("2. Analysis Focus")
+        st.sidebar.info(f"Select which subjects in **{selected_faculty}** you want to analyze.")
+        
+        target_subjects = st.sidebar.multiselect(
+            "Select Subjects:",
+            options=available_subjects,
+            default=available_subjects # Default to "Whole Faculty"
+        )
+        
+        if not target_subjects:
+            st.warning("Please select at least one subject.")
+            st.stop()
+            
+        # C. Select Stage
         all_stages = ['All Years', 'S1 & S2', 'S3', 'Senior Phase']
-
-        # --- SIDEBAR ---
-        st.sidebar.header("⚙️ Configuration")
-        target_subject = st.sidebar.selectbox("Select Subject to Analyze", all_subjects)
-        target_stage = st.sidebar.selectbox("Select Year Group", all_stages)
-        compare_mode = st.sidebar.radio("Compare Against:", ["Whole School Average", "Faculty Average"])
+        selected_stage = st.sidebar.selectbox("Year Group Filter", all_stages)
         
-        faculty_subjects = []
-        if compare_mode == "Faculty Average":
-            faculty_subjects = st.sidebar.multiselect("Select Subjects in Faculty", all_subjects, default=[target_subject])
-            if not faculty_subjects:
-                st.sidebar.warning("Please select at least one subject.")
+        # D. Benchmark
+        st.sidebar.header("3. Benchmark")
+        # Logic: If they selected ALL subjects in faculty, compare to school.
+        # If they selected a SUBSET (e.g. just Physics), allow comparing to Faculty Average.
+        
+        is_whole_faculty = set(target_subjects) == set(available_subjects)
+        
+        bench_options = ["Whole School Average"]
+        if not is_whole_faculty:
+            bench_options.append("Whole Faculty Average")
+            
+        compare_mode = st.sidebar.radio("Compare against:", bench_options)
 
-        # --- FILTERING ---
-        if target_stage != "All Years":
-            df_stage = df[df['Stage'] == target_stage]
+        # --- FILTER DATA ---
+        
+        # 1. Filter by Stage (applies to everything)
+        if selected_stage != "All Years":
+            active_df = df[df['Stage'] == selected_stage]
         else:
-            df_stage = df
+            active_df = df
 
-        if df_stage.empty:
-            st.warning(f"No data found for {target_stage}.")
+        if active_df.empty:
+            st.warning(f"No data found for {selected_stage}.")
             st.stop()
 
-        # Define Benchmark
+        # 2. Define Target Data (The subjects selected in the checkbox)
+        target_df = active_df[active_df['Subject'].isin(target_subjects)]
+        
+        if target_df.empty:
+            st.error("No responses found for this selection in this Year Group.")
+            st.stop()
+
+        # 3. Define Benchmark Data
         if compare_mode == "Whole School Average":
-            benchmark_df = df_stage
-            bench_name = "Whole School"
+            benchmark_df = active_df
+            bench_label = "Whole School"
         else:
-            if not faculty_subjects: st.stop()
-            benchmark_df = df_stage[df_stage[expected_cols['Subject']].isin(faculty_subjects)]
-            bench_name = "Faculty Average"
+            # Benchmark is the WHOLE faculty (all available subjects)
+            benchmark_df = active_df[active_df['Subject'].isin(available_subjects)]
+            bench_label = f"{selected_faculty} Average"
 
-        # Define Target Subject
-        subject_df = df_stage[df_stage[expected_cols['Subject']] == target_subject]
+        # --- DASHBOARD ---
+        
+        # Dynamic Title
+        if is_whole_faculty:
+            display_title = f"{selected_faculty} (Whole Faculty)"
+        elif len(target_subjects) == 1:
+            display_title = target_subjects[0]
+        else:
+            display_title = "Selected Subjects (Custom Group)"
 
-        if subject_df.empty:
-            st.error(f"No responses found for **{target_subject}** in **{target_stage}**.")
-            st.stop()
-
-        # --- DASHBOARD HEADER ---
         col1, col2, col3 = st.columns(3)
-        col1.metric("Target Subject", target_subject)
-        col2.metric("Year Group", target_stage)
-        col3.metric("Responses", len(subject_df))
-        st.markdown(f"**Comparing against:** {bench_name} ({len(benchmark_df)} responses)")
+        col1.metric("Analysis Target", display_title)
+        col2.metric("Year Group", selected_stage)
+        col3.metric("Responses", len(target_df))
+        
+        st.markdown(f"**Comparing against:** {bench_label} ({len(benchmark_df)} responses)")
         st.markdown("---")
 
         # --- GENERATE CARDS ---
@@ -156,8 +222,8 @@ if uploaded_file is not None:
         for cat, questions in col_map.items():
             if not questions: continue
             
-            # Big Bar Maths
-            subj_vals = subject_df[questions].values.flatten()
+            # Calculations
+            subj_vals = target_df[questions].values.flatten()
             bench_vals = benchmark_df[questions].values.flatten()
             s_score = calc_pos_rate(pd.Series(subj_vals))
             b_score = calc_pos_rate(pd.Series(bench_vals))
@@ -186,7 +252,7 @@ if uploaded_file is not None:
             """
             
             for q in questions:
-                q_s_score = calc_pos_rate(subject_df[q])
+                q_s_score = calc_pos_rate(target_df[q])
                 q_b_score = calc_pos_rate(benchmark_df[q])
                 q_text = q.strip('"') 
                 
@@ -197,7 +263,7 @@ if uploaded_file is not None:
                         <div class="q-bar-school" style="width: {q_b_score}%"></div>
                         <div class="q-bar-subject" style="width: {q_s_score}%"></div>
                     </div>
-                    <div class="q-stats">You: {int(q_s_score)}% | {bench_name}: {int(q_b_score)}%</div>
+                    <div class="q-stats">You: {int(q_s_score)}% | {bench_label}: {int(q_b_score)}%</div>
                 </div>
                 """
             html_output += "</details></div>"
