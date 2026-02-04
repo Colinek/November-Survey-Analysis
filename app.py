@@ -64,14 +64,34 @@ CATEGORIES = {
 # --- HELPER FUNCTIONS ---
 @st.cache_data
 def load_data(file):
-    try:
-        df = pd.read_csv(file, encoding='utf-8-sig', sep=None, engine='python')
-        df.columns = [str(c).strip().replace('\ufeff', '') for c in df.columns]
-        return df
-    except Exception as e:
-        st.error(f"Error reading file: {e}")
-        return None
-
+    # List of encodings to try: 
+    # 1. utf-8-sig (Best for Excel on Windows)
+    # 2. cp1252 (Standard Windows encoding)
+    # 3. latin1 (Old fallback)
+    encodings = ['utf-8-sig', 'cp1252', 'latin1']
+    
+    for enc in encodings:
+        try:
+            # RESET the file pointer to the start (Critical step for Streamlit)
+            file.seek(0)
+            
+            # Try reading with the current encoding
+            df = pd.read_csv(file, encoding=enc, sep=None, engine='python')
+            
+            # If we get here, it worked! Clean the columns
+            df.columns = [str(c).strip().replace('\ufeff', '') for c in df.columns]
+            
+            # Remove empty garbage rows/cols
+            df = df.dropna(how='all', axis=0).dropna(how='all', axis=1)
+            return df
+            
+        except Exception:
+            # If it fails, just continue to the next encoding in the list
+            continue
+            
+    # If we tried all encodings and still failed:
+    st.error("Could not read file. Please save it as 'CSV UTF-8' in Excel.")
+    return None
 def find_column(df, keywords):
     for col in df.columns:
         if any(k in col.lower() for k in keywords):
