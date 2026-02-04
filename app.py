@@ -1,32 +1,74 @@
+import streamlit as st
+import pandas as pd
+
+# --- PAGE CONFIGURATION ---
+st.set_page_config(page_title="School Survey Analyzer", layout="wide", page_icon="📊")
+
+# --- CSS STYLING ---
+st.markdown("""
+<style>
+    .card { background: white; padding: 20px; margin-bottom: 20px; border-radius: 10px; border: 1px solid #e0e0e0; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+    h3 { color: #2c3e50; border-bottom: 2px solid #3498db; padding-bottom: 5px; margin-top: 0; font-size: 1.2rem; }
+    
+    .bar-container { margin: 15px 0 5px 0; }
+    .label { display: flex; justify-content: space-between; font-weight: 700; margin-bottom: 5px; font-size: 14px; color: #444; }
+    .track { background: #ecf0f1; height: 25px; border-radius: 12px; overflow: hidden; position: relative; }
+    .bar { height: 100%; position: absolute; top: 0; left: 0; border-radius: 12px; transition: width 0.5s; }
+    .bar-school { background: #95a5a6; z-index: 1; opacity: 0.3; }
+    .bar-subject { background: #2980b9; z-index: 2; }
+    
+    details { margin-bottom: 10px; border: 1px solid #eee; border-radius: 5px; padding: 5px; }
+    summary { cursor: pointer; color: #555; font-weight: 600; padding: 5px; outline: none; }
+    summary:hover { color: #2980b9; background: #f9f9f9; }
+    .q-container { margin: 10px 0 10px 10px; border-left: 3px solid #eee; padding-left: 10px; }
+    .q-text { font-size: 0.85em; color: #666; margin-bottom: 3px; display: block; }
+    .q-track { background: #f0f0f0; height: 8px; border-radius: 4px; width: 100%; position: relative; overflow: hidden; }
+    .q-bar-school { height: 100%; background: #bdc3c7; position: absolute; opacity: 0.5; }
+    .q-bar-subject { height: 100%; background: #3498db; position: absolute; }
+    .q-stats { font-size: 0.75em; color: #888; margin-top: 2px; }
+
+    .diff-badge { font-size: 0.8em; padding: 2px 6px; border-radius: 4px; margin-left: 8px; color: white; }
+    .diff-green { background: #27ae60; }
+    .diff-red { background: #c0392b; }
+</style>
+""", unsafe_allow_html=True)
+
+# --- CONFIGURATION ---
+CATEGORIES = {
+    "1. Climate & Mindset": ["1 ", "13 ", "14 "],
+    "2. Pedagogy & Challenge": ["4 ", "5 ", "8 ", "9 "],
+    "3. Clarity & Communication": ["2 ", "3 ", "11 "],
+    "4. Support & Feedback": ["6 ", "7 ", "10 ", "12 "]
+}
+
 # --- HELPER FUNCTIONS ---
 @st.cache_data
 def load_data(file):
     try:
-        # Try reading with different encodings to handle Excel weirdness
-        try:
-            df = pd.read_csv(file, encoding='utf-8-sig') # Handles BOM
-        except:
-            df = pd.read_csv(file, encoding='ISO-8859-1') # Fallback for Windows
-            
-        # Clean all column names (remove spaces, make lowercase for searching)
+        df = pd.read_csv(file, encoding='ISO-8859-1')
+        # Clean column names immediately
         df.columns = df.columns.str.strip()
         return df
     except Exception as e:
         st.error(f"Error reading file: {e}")
         return None
 
-def find_column(df, keywords):
-    """Finds a column that contains any of the keywords."""
-    for col in df.columns:
-        if any(k in col.lower() for k in keywords):
-            return col
-    return None
+def map_stage(year):
+    y = str(year).strip().upper()
+    if 'S1' in y or 'S2' in y: return 'S1 & S2'
+    if 'S3' in y: return 'S3'
+    if any(k in y for k in ['S4', 'S5', 'S6']): return 'Senior Phase'
+    return 'Other'
 
-# ... (Keep map_stage and calc_pos_rate functions as they are) ...
+def calc_pos_rate(series):
+    valid = series.dropna().astype(str).str.lower().str.strip()
+    if valid.empty: return 0.0
+    pos_count = valid.isin(['agree', 'strongly agree']).sum()
+    return (pos_count / len(valid)) * 100
 
 # --- MAIN APP ---
 st.title("🏫 School Survey Analyzer")
-st.write("Upload your **Form Responses** CSV file.")
+st.write("Upload your **Form Responses** CSV file (not the percentages file).")
 
 uploaded_file = st.sidebar.file_uploader("Upload Survey Data (CSV)", type="csv")
 
@@ -34,31 +76,29 @@ if uploaded_file is not None:
     df = load_data(uploaded_file)
     
     if df is not None:
-        # --- SMART COLUMN DETECTION ---
-        # We look for columns containing specific words instead of exact matches
-        year_col = find_column(df, ['year group', 'grade', 'stage'])
-        subject_col = find_column(df, ['which subject', 'subject answering'])
+        # --- ROBUST COLUMN CHECK ---
+        # We verify these columns exist before proceeding
+        expected_cols = {
+            'Year Group': 'Which Year Group are you in?',
+            'Subject': 'Which subject are you answering these questions about today?'
+        }
         
-        # Check if we found them
-        if not year_col or not subject_col:
-            st.error("❌ **Columns Not Found**")
-            st.write("The script could not identify the 'Year Group' or 'Subject' columns.")
-            st.write("Please check you uploaded the **Raw Responses** file, not the Summary/Percentages file.")
-            st.write("Columns found in your file:", list(df.columns))
-            st.stop()
+        missing = [col for col in expected_cols.values() if col not in df.columns]
+        
+        if missing:
+            st.error("❌ **Incorrect File Format**")
+            st.warning(f"Could not find the following columns: {missing}")
+            st.info("💡 **Tip:** Ensure you uploaded the raw student responses file, NOT the summary percentages file.")
+            st.stop() # Stop execution here so it doesn't crash
             
-        # Rename them to standard names so the rest of the script works
-        df.rename(columns={year_col: 'Year Group', subject_col: 'Subject'}, inplace=True)
-        
         # Clean the subject column data
-        df['Subject'] = df['Subject'].astype(str).str.strip()
+        df[expected_cols['Subject']] = df[expected_cols['Subject']].astype(str).str.strip()
         
         # Create 'Stage' column safely
-        df['Stage'] = df['Year Group'].apply(map_stage)
+        df['Stage'] = df[expected_cols['Year Group']].apply(map_stage)
         
-        # --- (The rest of the script remains exactly the same) ---
         # Get Lists for Dropdowns
-        all_subjects = sorted(df['Subject'].unique())
+        all_subjects = sorted(df[expected_cols['Subject']].unique())
         all_stages = ['All Years', 'S1 & S2', 'S3', 'Senior Phase']
 
         # --- SIDEBAR ---
@@ -89,11 +129,11 @@ if uploaded_file is not None:
             bench_name = "Whole School"
         else:
             if not faculty_subjects: st.stop()
-            benchmark_df = df_stage[df_stage['Subject'].isin(faculty_subjects)]
+            benchmark_df = df_stage[df_stage[expected_cols['Subject']].isin(faculty_subjects)]
             bench_name = "Faculty Average"
 
         # Define Target Subject
-        subject_df = df_stage[df_stage['Subject'] == target_subject]
+        subject_df = df_stage[df_stage[expected_cols['Subject']] == target_subject]
 
         if subject_df.empty:
             st.error(f"No responses found for **{target_subject}** in **{target_stage}**.")
