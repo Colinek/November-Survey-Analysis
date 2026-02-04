@@ -51,14 +51,26 @@ CATEGORIES = {
 # --- FUNCTIONS ---
 @st.cache_data
 def load_data(file):
-    try:
-        # Aggressive reading: Detects commas/semicolons and handles Excel BOMs
-        df = pd.read_csv(file, encoding='utf-8-sig', sep=None, engine='python')
-        df.columns = [str(c).strip().replace('\ufeff', '') for c in df.columns]
-        return df
-    except Exception as e:
-        st.error(f"Error reading file: {e}")
-        return None
+    # List of encodings to try in order of likelihood
+    encodings = ['utf-8-sig', 'latin1', 'cp1252', 'utf-16']
+    
+    for enc in encodings:
+        try:
+            # Re-seek to the start of the file for each attempt
+            file.seek(0)
+            df = pd.read_csv(file, encoding=enc, sep=None, engine='python')
+            
+            # Clean up headers
+            df.columns = [str(c).strip().replace('\ufeff', '') for c in df.columns]
+            
+            # If it loaded successfully, return it
+            return df
+        except (UnicodeDecodeError, Exception):
+            continue # Try the next encoding
+            
+    # If all fail, show the error
+    st.error("❌ Failed to read the file. It may be in an unsupported format or corrupted.")
+    return None
 
 def find_column(df, keywords):
     for col in df.columns:
