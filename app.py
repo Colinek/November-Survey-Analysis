@@ -9,42 +9,36 @@ st.markdown("""
 <style>
     .card { background: white; padding: 20px; margin-bottom: 20px; border-radius: 10px; border: 1px solid #e0e0e0; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
     h3 { color: #2c3e50; border-bottom: 2px solid #3498db; padding-bottom: 5px; margin-top: 0; font-size: 1.2rem; }
-    
     .bar-container { margin: 15px 0 5px 0; }
     .label { display: flex; justify-content: space-between; font-weight: 700; margin-bottom: 5px; font-size: 14px; color: #444; }
     .track { background: #ecf0f1; height: 25px; border-radius: 12px; overflow: hidden; position: relative; }
     .bar { height: 100%; position: absolute; top: 0; left: 0; border-radius: 12px; transition: width 0.5s; }
     .bar-school { background: #95a5a6; z-index: 1; opacity: 0.3; }
     .bar-subject { background: #2980b9; z-index: 2; }
-    
     details { margin-bottom: 10px; border: 1px solid #eee; border-radius: 5px; padding: 5px; }
     summary { cursor: pointer; color: #555; font-weight: 600; padding: 5px; outline: none; }
-    summary:hover { color: #2980b9; background: #f9f9f9; }
     .q-container { margin: 10px 0 10px 10px; border-left: 3px solid #eee; padding-left: 10px; }
     .q-text { font-size: 0.85em; color: #666; margin-bottom: 3px; display: block; }
     .q-track { background: #f0f0f0; height: 8px; border-radius: 4px; width: 100%; position: relative; overflow: hidden; }
     .q-bar-school { height: 100%; background: #bdc3c7; position: absolute; opacity: 0.5; }
     .q-bar-subject { height: 100%; background: #3498db; position: absolute; }
     .q-stats { font-size: 0.75em; color: #888; margin-top: 2px; }
-
     .diff-badge { font-size: 0.8em; padding: 2px 6px; border-radius: 4px; margin-left: 8px; color: white; }
     .diff-green { background: #27ae60; }
     .diff-red { background: #c0392b; }
 </style>
 """, unsafe_allow_html=True)
 
-# --- CONFIGURATION: YOUR FACULTY DEFINITIONS ---
-# This maps the "Official" names you gave me.
-# The script will try to match the CSV subjects to these lists.
+# --- FACULTY DEFINITIONS ---
 FACULTY_DEFS = {
-    "English & Languages": ["English", "Media", "Gaelic", "French", "Gàidhlig", "Drama", "Literacy"],
-    "Maths": ["Maths", "Mathematics", "Applications"],
-    "Health & Wellbeing": ["PE", "Physical Education", "Sport", "Health", "Food", "Home Economics", "Cookery"],
+    "English & Languages": ["Media", "Gaelic", "French", "Gàidhlig", "Drama", "Literacy", "English"],
+    "Maths": ["Applications of Maths", "Maths", "Mathematics"],
+    "Health and Wellbeing": ["Physical Education", "PE", "Sport", "Health & Food", "Home Economics", "Cookery", "Health and Wellbeing"],
     "Science": ["Physics", "Biology", "Chemistry", "Science"],
-    "Music, Computing & Business": ["Business", "Admin", "IT", "Music", "Computing", "Computer"],
-    "Social Subjects": ["Classical", "Geography", "History", "Politics", "Modern Studies"],
-    "Technical": ["Woodwork", "Art", "Design", "Graphic", "Engineering", "Technical", "Textiles", "Fashion"],
-    "PSE": ["PSE", "Personal"]
+    "Music, Computing and Business": ["Business", "Music", "Administration", "Computing", "Comp Sci"],
+    "Social Subjects": ["Classical Studies", "Geography", "History", "Politics", "Modern Studies"],
+    "Technical": ["Woodwork", "Art and Design", "Graphic Communication", "Engineering Science", "Technical", "Textiles", "Fashion"],
+    "PSE": ["PSE", "Personal and Social Education"]
 }
 
 CATEGORIES = {
@@ -54,15 +48,13 @@ CATEGORIES = {
     "4. Support & Feedback": ["6 ", "7 ", "10 ", "12 "]
 }
 
-# --- HELPER FUNCTIONS ---
+# --- FUNCTIONS ---
 @st.cache_data
 def load_data(file):
     try:
-        try:
-            df = pd.read_csv(file, encoding='utf-8-sig')
-        except:
-            df = pd.read_csv(file, encoding='ISO-8859-1')
-        df.columns = df.columns.str.strip()
+        # Aggressive reading: Detects commas/semicolons and handles Excel BOMs
+        df = pd.read_csv(file, encoding='utf-8-sig', sep=None, engine='python')
+        df.columns = [str(c).strip().replace('\ufeff', '') for c in df.columns]
         return df
     except Exception as e:
         st.error(f"Error reading file: {e}")
@@ -74,208 +66,122 @@ def find_column(df, keywords):
             return col
     return None
 
-def assign_faculty(subject_name):
-    """Matches a subject string to your Faculty list."""
-    s_clean = str(subject_name).lower()
-    for faculty, keywords in FACULTY_DEFS.items():
-        for k in keywords:
-            if k.lower() in s_clean:
-                return faculty
-    return "Other / Unassigned"
-
-def map_stage(year):
-    y = str(year).strip().upper()
-    if 'S1' in y or 'S2' in y: return 'S1 & S2'
-    if 'S3' in y: return 'S3'
-    if any(k in y for k in ['S4', 'S5', 'S6']): return 'Senior Phase'
-    return 'Other'
+def assign_faculty(subj):
+    s_clean = str(subj).lower()
+    for fac, keywords in FACULTY_DEFS.items():
+        if any(k.lower() in s_clean for k in keywords):
+            return fac
+    return "Other"
 
 def calc_pos_rate(series):
     valid = series.dropna().astype(str).str.lower().str.strip()
     if valid.empty: return 0.0
-    pos_count = valid.isin(['agree', 'strongly agree']).sum()
-    return (pos_count / len(valid)) * 100
+    return (valid.isin(['agree', 'strongly agree']).sum() / len(valid)) * 100
 
 # --- MAIN APP ---
 st.title("🏫 Faculty Analyzer")
-st.write("Upload your **Form Responses** CSV file.")
+uploaded_file = st.sidebar.file_uploader("Upload Survey CSV", type="csv")
 
-uploaded_file = st.sidebar.file_uploader("Upload Survey Data (CSV)", type="csv")
-
-if uploaded_file is not None:
+if uploaded_file:
     df = load_data(uploaded_file)
-    
     if df is not None:
-        # 1. Identify Columns
-        year_col = find_column(df, ['year group', 'grade', 'stage'])
-        subject_col = find_column(df, ['which subject', 'subject answering'])
+        # --- COLUMN DETECTION & OVERRIDE ---
+        st.sidebar.subheader("📍 Data Mapping")
         
-        if not year_col or not subject_col:
-            st.error("❌ Columns Not Found. Please upload the raw responses file.")
-            st.stop()
-            
-        df.rename(columns={year_col: 'Year Group', subject_col: 'Subject'}, inplace=True)
-        df['Subject'] = df['Subject'].astype(str).str.strip()
-        df['Stage'] = df['Year Group'].apply(map_stage)
+        # Try auto-detecting first
+        auto_year = find_column(df, ['year group', 'group', 'stage'])
+        auto_subj = find_column(df, ['which subject', 'subject answering', 'subject today'])
         
-        # 2. Assign Faculties
-        df['Faculty'] = df['Subject'].apply(assign_faculty)
+        # UI for Column Selection (Pre-filled with auto-detection)
+        year_col = st.sidebar.selectbox("Select Year Group Column:", df.columns, 
+                                       index=list(df.columns).index(auto_year) if auto_year in df.columns else 0)
+        
+        subj_col = st.sidebar.selectbox("Select Subject Column:", df.columns, 
+                                       index=list(df.columns).index(auto_subj) if auto_subj in df.columns else 0)
 
-        # --- SIDEBAR CONFIG ---
-        st.sidebar.header("1. Select Group")
-        
-        # A. Select Faculty
-        all_faculties = sorted([f for f in df['Faculty'].unique() if f != "Other / Unassigned"])
-        # Add 'Other' to the end if it exists
-        if "Other / Unassigned" in df['Faculty'].unique():
-            all_faculties.append("Other / Unassigned")
-            
-        selected_faculty = st.sidebar.selectbox("Choose Faculty", all_faculties)
-        
-        # Filter to just this faculty for the next steps
-        faculty_df = df[df['Faculty'] == selected_faculty]
-        available_subjects = sorted(faculty_df['Subject'].unique())
-        
-        # B. Select Target (The "Checkboxes" request)
-        st.sidebar.header("2. Analysis Focus")
-        st.sidebar.info(f"Select which subjects in **{selected_faculty}** you want to analyze.")
-        
-        target_subjects = st.sidebar.multiselect(
-            "Select Subjects:",
-            options=available_subjects,
-            default=available_subjects # Default to "Whole Faculty"
-        )
-        
-        if not target_subjects:
-            st.warning("Please select at least one subject.")
-            st.stop()
-            
-        # C. Select Stage
-        all_stages = ['All Years', 'S1 & S2', 'S3', 'Senior Phase']
-        selected_stage = st.sidebar.selectbox("Year Group Filter", all_stages)
-        
-        # D. Benchmark
-        st.sidebar.header("3. Benchmark")
-        # Logic: If they selected ALL subjects in faculty, compare to school.
-        # If they selected a SUBSET (e.g. just Physics), allow comparing to Faculty Average.
-        
-        is_whole_faculty = set(target_subjects) == set(available_subjects)
-        
-        bench_options = ["Whole School Average"]
-        if not is_whole_faculty:
-            bench_options.append("Whole Faculty Average")
-            
-        compare_mode = st.sidebar.radio("Compare against:", bench_options)
+        # Apply mapping
+        df['Mapped_Year'] = df[year_col]
+        df['Mapped_Subj'] = df[subj_col].astype(str).str.strip()
 
-        # --- FILTER DATA ---
+        # Define Stages
+        def get_stage(y):
+            y = str(y).upper()
+            if 'S1' in y or 'S2' in y: return 'S1 & S2'
+            if 'S3' in y: return 'S3'
+            return 'Senior Phase' if any(s in y for s in ['S4','S5','S6']) else 'Other'
         
-        # 1. Filter by Stage (applies to everything)
-        if selected_stage != "All Years":
-            active_df = df[df['Stage'] == selected_stage]
+        df['Stage'] = df['Mapped_Year'].apply(get_stage)
+        df['Faculty'] = df['Mapped_Subj'].apply(assign_faculty)
+
+        # --- SELECTION FILTERS ---
+        st.sidebar.divider()
+        fac_list = sorted(df['Faculty'].unique())
+        sel_fac = st.sidebar.selectbox("1. Choose Faculty", fac_list)
+        
+        fac_subjects = sorted(df[df['Faculty'] == sel_fac]['Mapped_Subj'].unique())
+        sel_subjects = st.sidebar.multiselect("2. Select Subjects (Checkboxes)", fac_subjects, default=fac_subjects)
+        
+        sel_stage = st.sidebar.selectbox("3. Year Group Filter", ['All Years', 'S1 & S2', 'S3', 'Senior Phase'])
+        
+        is_whole_fac = set(sel_subjects) == set(fac_subjects)
+        bench_opts = ["Whole School"] + (["Faculty Average"] if not is_whole_fac else [])
+        sel_bench = st.sidebar.radio("4. Compare Against", bench_opts)
+
+        # --- DATA FILTERING ---
+        active_df = df if sel_stage == 'All Years' else df[df['Stage'] == sel_stage]
+        target_df = active_df[active_df['Mapped_Subj'].isin(sel_subjects)]
+        
+        if sel_bench == "Whole School":
+            bench_df = active_df
         else:
-            active_df = df
+            bench_df = active_df[active_df['Faculty'] == sel_fac]
 
-        if active_df.empty:
-            st.warning(f"No data found for {selected_stage}.")
-            st.stop()
-
-        # 2. Define Target Data (The subjects selected in the checkbox)
-        target_df = active_df[active_df['Subject'].isin(target_subjects)]
-        
         if target_df.empty:
-            st.error("No responses found for this selection in this Year Group.")
-            st.stop()
-
-        # 3. Define Benchmark Data
-        if compare_mode == "Whole School Average":
-            benchmark_df = active_df
-            bench_label = "Whole School"
+            st.warning("No data found for this selection.")
         else:
-            # Benchmark is the WHOLE faculty (all available subjects)
-            benchmark_df = active_df[active_df['Subject'].isin(available_subjects)]
-            bench_label = f"{selected_faculty} Average"
+            # --- DASHBOARD UI ---
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Focus", sel_fac if is_whole_fac else "Selected Subjects")
+            c2.metric("Year", sel_stage)
+            c3.metric("Responses", len(target_df))
+            st.write(f"**Benchmark:** {sel_bench} ({len(bench_df)} responses)")
 
-        # --- DASHBOARD ---
-        
-        # Dynamic Title
-        if is_whole_faculty:
-            display_title = f"{selected_faculty} (Whole Faculty)"
-        elif len(target_subjects) == 1:
-            display_title = target_subjects[0]
-        else:
-            display_title = "Selected Subjects (Custom Group)"
-
-        col1, col2, col3 = st.columns(3)
-        col1.metric("Analysis Target", display_title)
-        col2.metric("Year Group", selected_stage)
-        col3.metric("Responses", len(target_df))
-        
-        st.markdown(f"**Comparing against:** {bench_label} ({len(benchmark_df)} responses)")
-        st.markdown("---")
-
-        # --- GENERATE CARDS ---
-        col_map = {}
-        for cat, prefixes in CATEGORIES.items():
-            col_map[cat] = [col for col in df.columns if any(col.startswith(p) for p in prefixes)]
-
-        html_output = ""
-        for cat, questions in col_map.items():
-            if not questions: continue
-            
-            # Calculations
-            subj_vals = target_df[questions].values.flatten()
-            bench_vals = benchmark_df[questions].values.flatten()
-            s_score = calc_pos_rate(pd.Series(subj_vals))
-            b_score = calc_pos_rate(pd.Series(bench_vals))
-            diff = s_score - b_score
-            
-            color = "#2980b9" # Blue
-            diff_html = ""
-            if diff > 5:
-                color = "#27ae60" # Green
-                diff_html = f"<span class='diff-badge diff-green'>+{int(diff)}%</span>"
-            elif diff < -5:
-                color = "#c0392b" # Red
-                diff_html = f"<span class='diff-badge diff-red'>{int(diff)}%</span>"
-
-            html_output += f"""
-            <div class="card">
-                <h3>{cat}</h3>
-                <div class="bar-container">
-                    <div class="label"><span>Category Score {diff_html}</span><span>{int(s_score)}%</span></div>
-                    <div class="track">
-                        <div class="bar bar-school" style="width: {b_score}%"></div>
-                        <div class="bar bar-subject" style="width: {s_score}%; background: {color};"></div>
-                    </div>
-                </div>
-                <details><summary>▼ Breakdown by Question</summary>
-            """
-            
-            for q in questions:
-                q_s_score = calc_pos_rate(target_df[q])
-                q_b_score = calc_pos_rate(benchmark_df[q])
-                q_text = q.strip('"') 
+            html_output = ""
+            for cat, prefixes in CATEGORIES.items():
+                cat_cols = [c for c in df.columns if any(c.startswith(p) for p in prefixes)]
+                if not cat_cols: continue
                 
+                s_score = calc_pos_rate(pd.Series(target_df[cat_cols].values.flatten()))
+                b_score = calc_pos_rate(pd.Series(bench_df[cat_cols].values.flatten()))
+                diff = s_score - b_score
+                
+                color = "#2980b9"
+                badge = ""
+                if diff > 5: color, badge = "#27ae60", f"<span class='diff-badge diff-green'>+{int(diff)}%</span>"
+                elif diff < -5: color, badge = "#c0392b", f"<span class='diff-badge diff-red'>{int(diff)}%</span>"
+
                 html_output += f"""
-                <div class="q-container">
-                    <span class="q-text">{q_text}</span>
-                    <div class="q-track">
-                        <div class="q-bar-school" style="width: {q_b_score}%"></div>
-                        <div class="q-bar-subject" style="width: {q_s_score}%"></div>
+                <div class="card">
+                    <h3>{cat} {badge}</h3>
+                    <div class="bar-container">
+                        <div class="label"><span>Category Average</span><span>{int(s_score)}%</span></div>
+                        <div class="track">
+                            <div class="bar bar-school" style="width: {b_score}%"></div>
+                            <div class="bar bar-subject" style="width: {s_score}%; background: {color};"></div>
+                        </div>
                     </div>
-                    <div class="q-stats">You: {int(q_s_score)}% | {bench_label}: {int(q_b_score)}%</div>
-                </div>
+                    <details><summary>▼ Breakdown by Question</summary>
                 """
-            html_output += "</details></div>"
-
-        st.markdown(html_output, unsafe_allow_html=True)
-        
-        st.info("""
-        **Legend:**
-        🟦 **Blue:** Broadly in line (+/- 5%) | 
-        🟩 **Green:** Significant Strength (> +5%) | 
-        🟥 **Red:** Significant Concern (< -5%)
-        """)
-
+                for q in cat_cols:
+                    qs, qb = calc_pos_rate(target_df[q]), calc_pos_rate(bench_df[q])
+                    html_output += f"""
+                    <div class="q-container">
+                        <span class="q-text">{q}</span>
+                        <div class="q-track"><div class="q-bar-school" style="width:{qb}%"></div><div class="q-bar-subject" style="width:{qs}%"></div></div>
+                        <div class="q-stats">You: {int(qs)}% | Bench: {int(qb)}%</div>
+                    </div>"""
+                html_output += "</details></div>"
+            
+            st.markdown(html_output, unsafe_allow_html=True)
 else:
-    st.info("Please upload your **Form Responses CSV** to begin.")
+    st.info("Please upload your survey CSV to begin.")
