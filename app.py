@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 
 # --- PAGE CONFIGURATION ---
-st.set_page_config(page_title="Faculty Analyzer", layout="wide", page_icon="🏫")
+st.set_page_config(page_title="November Survey Analysis", layout="wide", page_icon="🏫")
 
 # --- CSS STYLING ---
 st.markdown("""
