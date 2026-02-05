@@ -111,7 +111,7 @@ def calc_pos_rate(series):
     return (valid.isin(['agree', 'strongly agree']).sum() / len(valid)) * 100
 
 # --- MAIN APP ---
-st.title("🏫 Faculty Analyzer")
+st.title("🏫 November Survey Analysis")
 uploaded_file = st.sidebar.file_uploader("Upload Survey CSV", type="csv")
 
 if uploaded_file:
